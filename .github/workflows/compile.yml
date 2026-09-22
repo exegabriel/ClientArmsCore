@@ -1,0 +1,157 @@
+name: Compile ClientArmsCore
+
+on:
+  push:
+    branches:
+      - master
+      - main
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Setup MSBuild
+        uses: microsoft/setup-msbuild@v2
+
+      - name: Show tool versions
+        shell: pwsh
+        run: |
+          git --version
+          msbuild -version
+
+      - name: Download HL2SDK CSGO
+        shell: pwsh
+        run: |
+          git clone `
+            --depth 1 `
+            --branch csgo `
+            --recursive `
+            https://github.com/alliedmodders/hl2sdk.git `
+            D:\hl2sdk-csgo
+
+      - name: Download SourceMod source
+        shell: pwsh
+        run: |
+          git clone `
+            --depth 1 `
+            --branch 1.10-dev `
+            --recursive `
+            https://github.com/alliedmodders/sourcemod.git `
+            D:\sourcemod
+
+      - name: Download MetaMod source
+        shell: pwsh
+        run: |
+          git clone `
+            --depth 1 `
+            --branch 1.10-dev `
+            --recursive `
+            https://github.com/alliedmodders/metamod-source.git `
+            D:\metamod
+
+      - name: Verify dependencies
+        shell: pwsh
+        run: |
+          $required = @(
+            "D:\hl2sdk-csgo",
+            "D:\sourcemod",
+            "D:\metamod",
+            "D:\metamod\core\sourcehook",
+            "msvc15\ArmsFix.sln",
+            "msvc15\ArmsFix.vcxproj"
+          )
+
+          foreach ($path in $required) {
+            if (-not (Test-Path $path)) {
+              throw "Missing required path: $path"
+            }
+
+            Write-Host "Found: $path"
+          }
+
+      - name: Build ClientArmsCore
+        shell: pwsh
+        env:
+          HL2SDK-CSGO: D:\hl2sdk-csgo
+          SOURCEMOD: D:\sourcemod
+          METAMOD: D:\metamod
+        run: |
+          msbuild msvc15\ArmsFix.sln `
+            /m `
+            /verbosity:normal `
+            /p:Configuration=Release `
+            /p:Platform=Win32 `
+            /p:PlatformToolset=v143 `
+            /p:WindowsTargetPlatformVersion=10.0
+
+      - name: Find compiled DLL
+        shell: pwsh
+        run: |
+          Write-Host "Searching for compiled DLL files..."
+
+          $dlls = Get-ChildItem `
+            -Path . `
+            -Recurse `
+            -Filter "*.dll" `
+            -ErrorAction SilentlyContinue
+
+          if (-not $dlls) {
+            throw "No DLL was produced by the build."
+          }
+
+          $dlls | Select-Object -ExpandProperty FullName
+
+      - name: Package extension
+        shell: pwsh
+        run: |
+          New-Item `
+            -ItemType Directory `
+            -Force `
+            -Path artifact | Out-Null
+
+          $dll = Get-ChildItem `
+            -Path . `
+            -Recurse `
+            -Filter "ClientArmsCore.ext*.dll" `
+            -ErrorAction SilentlyContinue |
+            Select-Object -First 1
+
+          if (-not $dll) {
+            throw "ClientArmsCore DLL was not found."
+          }
+
+          Write-Host "Using DLL: $($dll.FullName)"
+
+          Copy-Item `
+            $dll.FullName `
+            "artifact\ClientArmsCore.ext.2.csgo.dll"
+
+          $inc = Get-ChildItem `
+            -Path . `
+            -Recurse `
+            -Filter "*.inc" `
+            -ErrorAction SilentlyContinue |
+            Select-Object -First 1
+
+          if (-not $inc) {
+            throw "ClientArmsCore include file was not found."
+          }
+
+          Copy-Item `
+            $inc.FullName `
+            "artifact\clientarmscore.inc"
+
+          Get-ChildItem artifact
+
+      - name: Upload compiled extension
+        uses: actions/upload-artifact@v4
+        with:
+          name: ClientArmsCore-Windows
+          path: artifact
